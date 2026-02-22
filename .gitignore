@@ -1,0 +1,20 @@
+# IDE
+.idea/
+*.iml
+
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+.venv/
+
+# База данных
+*.db
+snippets.db
+
+# Сборка
+build/
+dist/
+*.exe
+*.spec
