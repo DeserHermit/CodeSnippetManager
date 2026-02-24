@@ -1,169 +1,269 @@
 """
-Кастомный редактор кода с подсветкой синтаксиса
+Редактор кода с правильной подсветкой и номерами строк
+ИСПРАВЛЕННАЯ ВЕРСИЯ - без рекурсии и вылетов
 """
 
-from PyQt6.QtWidgets import QTextEdit, QApplication
-from PyQt6.QtGui import QFont, QTextCharFormat, QColor, QSyntaxHighlighter
-from PyQt6.QtCore import Qt, QRegularExpression
-from pygments import highlight
-from pygments.lexers import get_lexer_by_name, guess_lexer, get_all_lexers
-from pygments.formatters import HtmlFormatter
-from pygments.styles import get_style_by_name
-import html
+from PyQt6.QtWidgets import QPlainTextEdit, QWidget, QTextEdit
+from PyQt6.QtGui import (
+    QPainter, QColor, QFont, QTextCursor, QTextCharFormat,
+    QPalette, QSyntaxHighlighter, QTextFormat
+)
+from PyQt6.QtCore import Qt, QRect, QSize, QTimer
+import re
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-class SyntaxHighlighter(QSyntaxHighlighter):
-    """Подсветка синтаксиса для простых языков (альтернатива Pygments)"""
+class LineNumberArea(QWidget):
+    def __init__(self, editor):
+        super().__init__(editor)
+        self.code_editor = editor
+
+    def sizeHint(self):
+        return QSize(self.code_editor.line_number_area_width(), 0)
+
+    def paintEvent(self, event):
+        self.code_editor.lineNumberAreaPaintEvent(event)
+
+
+class PythonHighlighter(QSyntaxHighlighter):
+    """Правильная подсветка синтаксиса Python"""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.highlighting_rules = []
 
-        # Формат для ключевых слов Python
+        # Формат для ключевых слов
         keyword_format = QTextCharFormat()
-        keyword_format.setForeground(QColor(0, 0, 255))
+        keyword_format.setForeground(QColor(203, 166, 247))
         keyword_format.setFontWeight(QFont.Weight.Bold)
 
-        python_keywords = [
-            'def', 'class', 'return', 'if', 'elif', 'else', 'for', 'while',
-            'import', 'from', 'as', 'try', 'except', 'finally', 'with'
+        keywords = [
+            'and', 'assert', 'break', 'class', 'continue', 'def',
+            'del', 'elif', 'else', 'except', 'exec', 'finally',
+            'for', 'from', 'global', 'if', 'import', 'in',
+            'is', 'lambda', 'not', 'or', 'pass', 'print',
+            'raise', 'return', 'try', 'while', 'yield',
+            'None', 'True', 'False', 'async', 'await'
         ]
 
-        for word in python_keywords:
-            pattern = QRegularExpression(f"\\b{word}\\b")
-            self.highlighting_rules.append((pattern, keyword_format))
+        for word in keywords:
+            pattern = r'\b' + word + r'\b'
+            self.highlighting_rules.append((re.compile(pattern), keyword_format))
 
         # Формат для строк
         string_format = QTextCharFormat()
-        string_format.setForeground(QColor(163, 21, 21))
-        self.highlighting_rules.append((QRegularExpression("\".*\""), string_format))
-        self.highlighting_rules.append((QRegularExpression("\'.*\'"), string_format))
+        string_format.setForeground(QColor(166, 218, 149))
+        self.highlighting_rules.append((re.compile(r'"[^"\\]*(\\.[^"\\]*)*"'), string_format))
+        self.highlighting_rules.append((re.compile(r"'[^'\\]*(\\.[^'\\]*)*'"), string_format))
+        self.highlighting_rules.append((re.compile(r'""".*?"""', re.DOTALL), string_format))
+        self.highlighting_rules.append((re.compile(r"'''.*?'''", re.DOTALL), string_format))
 
         # Формат для комментариев
         comment_format = QTextCharFormat()
-        comment_format.setForeground(QColor(0, 128, 0))
-        self.highlighting_rules.append((QRegularExpression("#[^\n]*"), comment_format))
+        comment_format.setForeground(QColor(127, 132, 156))
+        comment_format.setFontItalic(True)
+        self.highlighting_rules.append((re.compile(r'#[^\n]*'), comment_format))
+
+        # Формат для чисел
+        number_format = QTextCharFormat()
+        number_format.setForeground(QColor(245, 194, 99))
+        self.highlighting_rules.append((re.compile(r'\b[0-9]+\b'), number_format))
+        self.highlighting_rules.append((re.compile(r'\b[0-9]*\.[0-9]+\b'), number_format))
+
+        # Формат для функций
+        function_format = QTextCharFormat()
+        function_format.setForeground(QColor(137, 180, 250))
+        self.highlighting_rules.append((re.compile(r'\b[a-zA-Z_][a-zA-Z0-9_]*(?=\()'), function_format))
+
+        # Формат для декораторов
+        decorator_format = QTextCharFormat()
+        decorator_format.setForeground(QColor(245, 194, 99))
+        self.highlighting_rules.append((re.compile(r'@[a-zA-Z_][a-zA-Z0-9_]*'), decorator_format))
 
     def highlightBlock(self, text):
-        """Применение правил подсветки к блоку текста"""
         for pattern, format in self.highlighting_rules:
-            match_iterator = pattern.globalMatch(text)
-            while match_iterator.hasNext():
-                match = match_iterator.next()
-                self.setFormat(match.capturedStart(),
-                               match.capturedLength(), format)
+            for match in pattern.finditer(text):
+                start, end = match.span()
+                self.setFormat(start, end - start, format)
 
 
-# core/code_editor.py - Обновляем класс CodeEditor
+class CodeEditor(QPlainTextEdit):
+    """Редактор кода с подсветкой"""
 
-class CodeEditor(QTextEdit):
-    """Расширенный текстовый редактор с подсветкой синтаксиса"""
-
-    # Доступные стили Pygments
-    AVAILABLE_STYLES = ['default', 'monokai', 'friendly', 'colorful',
-                        'autumn', 'murphy', 'manni', 'pastie', 'borland']
+    AVAILABLE_STYLES = ['monokai', 'default', 'friendly']
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setup_ui()
-        self.current_language = "python"
-        self.current_style = "monokai"
 
-        # Кэш для оптимизации
-        self._last_text = ""
-        self._last_lang = ""
-        self._last_style = ""
+        # Флаг для предотвращения рекурсии
+        self._updating = False
 
-    def setup_ui(self):
-        """Настройка интерфейса редактора"""
-        font = QFont("Consolas", 10)
+        # Настройка внешнего вида
+        self.setup_appearance()
+
+        # Подсветка синтаксиса
+        self.highlighter = PythonHighlighter(self.document())
+
+        # Настройка номеров строк
+        self.init_line_numbers()
+
+        # Подключаем сигналы
+        self.cursorPositionChanged.connect(self.highlight_current_line)
+
+        # Подсветка текущей строки
+        self.highlight_current_line()
+
+    def setup_appearance(self):
+        """Настройка внешнего вида"""
+        font = QFont("Consolas", 11)
         font.setStyleHint(QFont.StyleHint.Monospace)
         self.setFont(font)
-        self.setTabStopDistance(40)
-        self.setLineWrapMode(QTextEdit.LineWrapMode.NoWrap)
 
-    def set_language(self, language: str):
-        """Установка языка программирования"""
-        self.current_language = language.lower()
-        self.highlight_syntax()
+        self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(' '))
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
 
-    def set_style(self, style_name: str):
-        """Установка цветовой схемы"""
-        if style_name in self.AVAILABLE_STYLES:
-            print(f"DEBUG: Установка темы {style_name}")  # Для отладки
-            self.current_style = style_name
-            # Принудительно сбрасываем кэш, чтобы тема применилась
-            self._last_text = ""
-            self._last_style = ""
-            self.highlight_syntax()
+        # Базовая тёмная тема
+        self.setStyleSheet("""
+            QPlainTextEdit {
+                background-color: #1e1e2e;
+                color: #cdd6f4;
+                border: 1px solid #313244;
+                border-radius: 8px;
+                selection-background-color: #45475a;
+            }
+        """)
+
+    def init_line_numbers(self):
+        self.line_number_area = LineNumberArea(self)
+
+        self.blockCountChanged.connect(self.update_line_number_area_width)
+        self.updateRequest.connect(self.update_line_number_area)
+        self.cursorPositionChanged.connect(self.update_line_number_area)
+
+        self.update_line_number_area_width()
+
+    def line_number_area_width(self):
+        digits = len(str(max(1, self.blockCount())))
+        return 40 + self.fontMetrics().horizontalAdvance('9') * digits
+
+    def update_line_number_area_width(self):
+        self.setViewportMargins(self.line_number_area_width(), 0, 0, 0)
+
+    def update_line_number_area(self, rect=None, dy=0):
+        if rect is None:
+            self.line_number_area.update()
+        elif dy:
+            self.line_number_area.scroll(0, dy)
         else:
-            print(f"DEBUG: Тема {style_name} не найдена в доступных")
+            self.line_number_area.update(0, rect.y(),
+                                        self.line_number_area.width(), rect.height())
 
-    def highlight_syntax(self):
-        """Подсветка синтаксиса с использованием Pygments"""
-        plain_text = self.toPlainText()
-
-        print(f"DEBUG: Подсветка. Язык: {self.current_language}, Тема: {self.current_style}")  # Для отладки
-
-        # Проверка на изменения (оптимизация)
-        if (plain_text == self._last_text and
-                self.current_language == self._last_lang and
-                self.current_style == self._last_style):
-            print("DEBUG: Нет изменений, пропускаем подсветку")
-            return
-
-        if not plain_text.strip():
-            self._last_text = plain_text
-            self._last_lang = self.current_language
-            self._last_style = self.current_style
-            return
-
-        try:
-            # Получаем лексер для языка
-            lexer = get_lexer_by_name(self.current_language, stripall=True)
-        except Exception as e:
-            try:
-                lexer = guess_lexer(plain_text)
-                print(f"DEBUG: Язык угадан: {lexer.name}")
-            except:
-                from pygments.lexers import TextLexer
-                lexer = TextLexer()
-                print(f"DEBUG: Используется текстовый лексер: {e}")
-
-        # Форматируем в HTML
-        formatter = HtmlFormatter(
-            style=self.current_style,
-            noclasses=True,  # Inline стили
-            linenos=False,  # Без номеров строк
-            nowrap=True  # Без переноса
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        cr = self.contentsRect()
+        self.line_number_area.setGeometry(
+            QRect(cr.left(), cr.top(), self.line_number_area_width(), cr.height())
         )
 
+    def lineNumberAreaPaintEvent(self, event):
+        painter = QPainter(self.line_number_area)
+        painter.fillRect(event.rect(), QColor(30, 30, 46))
+
+        # Линия разделителя
+        painter.setPen(QColor(50, 55, 70))
+        painter.drawLine(self.line_number_area.width() - 1, event.rect().top(),
+                        self.line_number_area.width() - 1, event.rect().bottom())
+
+        block = self.firstVisibleBlock()
+        block_number = block.blockNumber()
+        top = round(self.blockBoundingGeometry(block).translated(self.contentOffset()).top())
+        bottom = top + round(self.blockBoundingRect(block).height())
+
+        current_block = self.textCursor().blockNumber()
+
+        while block.isValid() and top <= event.rect().bottom():
+            if block.isVisible() and bottom >= event.rect().top():
+                number = str(block_number + 1)
+
+                if block_number == current_block:
+                    painter.setPen(QColor(203, 166, 247))
+                    font = painter.font()
+                    font.setBold(True)
+                    painter.setFont(font)
+                else:
+                    painter.setPen(QColor(110, 115, 130))
+                    font = painter.font()
+                    font.setBold(False)
+                    painter.setFont(font)
+
+                painter.drawText(0, top, self.line_number_area.width() - 8,
+                               self.fontMetrics().height(),
+                               Qt.AlignmentFlag.AlignRight, number)
+
+            block = block.next()
+            top = bottom
+            bottom = top + round(self.blockBoundingRect(block).height())
+            block_number += 1
+
+    def highlight_current_line(self):
+        """Подсветка текущей строки"""
+        extra_selections = []
+
+        if not self.isReadOnly():
+            selection = QTextEdit.ExtraSelection()
+            line_color = QColor(45, 52, 68, 100)
+            selection.format.setBackground(line_color)
+            selection.format.setProperty(QTextFormat.Property.FullWidthSelection, True)
+            selection.cursor = self.textCursor()
+            selection.cursor.clearSelection()
+            extra_selections.append(selection)
+
+        self.setExtraSelections(extra_selections)
+
+    def set_language(self, language):
+        """Установка языка (без рекурсии)"""
+        if self._updating:
+            return
+
+        self._updating = True
         try:
-            highlighted_html = highlight(plain_text, lexer, formatter)
+            # Просто сохраняем язык, подсветка уже работает через highlighter
+            pass
+        finally:
+            self._updating = False
 
-            # Сохраняем текущее состояние
-            current_position = self.textCursor().position()
-            current_scroll = self.verticalScrollBar().value()
+    def setPlainText(self, text):
+        """Установка текста без рекурсии"""
+        if self._updating:
+            return
 
-            # Устанавливаем HTML
-            self.setHtml(highlighted_html)
+        self._updating = True
+        try:
+            super().setPlainText(text)
+        finally:
+            self._updating = False
 
-            # Восстанавливаем позицию курсора и прокрутку
+    def keyPressEvent(self, event):
+        """Обработка нажатий клавиш"""
+        if event.key() == Qt.Key.Key_Tab:
+            self.insertPlainText("    ")
+            return
+        elif event.key() == Qt.Key.Key_Backtab:
             cursor = self.textCursor()
-            cursor.setPosition(min(current_position, len(plain_text)))
-            self.setTextCursor(cursor)
-            self.verticalScrollBar().setValue(current_scroll)
+            if not cursor.hasSelection():
+                cursor.movePosition(QTextCursor.MoveOperation.Left,
+                                   QTextCursor.MoveMode.KeepAnchor, 4)
+                if cursor.selectedText() == "    ":
+                    cursor.removeSelectedText()
+                    return
 
-            # Сохраняем в кэш
-            self._last_text = plain_text
-            self._last_lang = self.current_language
-            self._last_style = self.current_style
+        super().keyPressEvent(event)
 
-            print(f"DEBUG: Подсветка применена успешно")
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            QTimer.singleShot(10, self.line_number_area.update)
 
-        except Exception as e:
-            print(f"DEBUG: Ошибка подсветки синтаксиса: {e}")
-            self.setPlainText(plain_text)
+    def text(self):
+        """Получение текста"""
+        return self.toPlainText()

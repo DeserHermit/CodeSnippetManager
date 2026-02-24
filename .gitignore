@@ -1,20 +1,60 @@
 # IDE
 .idea/
 *.iml
+*.iws
+*.ipr
 
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
 venv/
 env/
 .venv/
+ENV/
+env.bak/
+venv.bak/
 
 # База данных
 *.db
+*.sqlite
+*.sqlite3
 snippets.db
 
 # Сборка
 build/
 dist/
 *.exe
+*.msi
+*.dmg
+*.app
 *.spec
+
+# Резервные копии
+backup/
+*.backup.db
+*.backup.sqlite
+
+# Логи
+*.log
+*.log.*
+
+# Временные файлы
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Системные файлы
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*

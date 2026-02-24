@@ -67,7 +67,7 @@
  [],
  False,
  False,
- 1766679270,
+ 1771873614,
  [('runw.exe',
    'C:\\Users\\oksan\\PycharmProjects\\CodeSnippetManager\\.venv\\Lib\\site-packages\\PyInstaller\\bootloader\\Windows-64bit-intel\\runw.exe',
    'EXECUTABLE')],
